@@ -9,24 +9,24 @@ describe('TransactionStoreEntry', () => {
             const signature = Signature.unserialize(BufferUtils.fromBase64(Dummy.signature1));
             const proof = BufferUtils.fromAscii('ABCD');
             const tx1 = new BasicTransaction(senderPubKey, recipientAddress, 1, 1, 1, signature);
-            const tx2 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, 1, 1, 1, new Uint8Array(0), proof);
-            const tx3 = new ExtendedTransaction(senderAddress, Account.Type.HTLC, recipientAddress, Account.Type.BASIC, 100, 0, 1, new Uint8Array(0), proof);
+            const tx2 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, 1, 1, 1, Transaction.Flag.NONE, new Uint8Array(0), proof);
+            const tx3 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, 100, 0, 1, Transaction.Flag.NONE, new Uint8Array(0), proof);
 
             /** @type {Array.<Transaction>} */
             const transactions = [tx1, tx2, tx3];
             transactions.sort((a, b) => a.compareBlockOrder(b));
 
             const block = await blockchain.createBlock({ transactions });
-            const blockHash = await block.hash();
+            const blockHash = block.hash();
 
             /** @type {Array.<TransactionStoreEntry>} */
-            const entries = await TransactionStoreEntry.fromBlock(block);
+            const entries = TransactionStoreEntry.fromBlock(block);
             expect(entries.length).toBe(3);
 
             for (let i=0; i<entries.length; ++i) {
                 /** @type {TransactionStoreEntry} */
                 const entry = entries[i];
-                expect(entry.transactionHash.equals(await transactions[i].hash())).toBeTruthy();
+                expect(entry.transactionHash.equals(transactions[i].hash())).toBeTruthy();
                 expect(entry.sender.equals(transactions[i].sender)).toBeTruthy();
                 expect(entry.recipient.equals(transactions[i].recipient)).toBeTruthy();
                 expect(entry.blockHeight).toBe(block.height);

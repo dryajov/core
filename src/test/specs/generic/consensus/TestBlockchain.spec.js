@@ -138,23 +138,31 @@ class TestBlockchain extends FullChain {
             const numTransactions = typeof options.numTransactions !== 'undefined' ? options.numTransactions : height - 1;
             transactions = await this.generateTransactions(numTransactions);
         }
+        let prunedAccounts = options.prunedAccounts;
+        if (!prunedAccounts) {
+            try {
+                prunedAccounts = await this.accounts.gatherToBePrunedAccounts(transactions, height, this._transactionCache);
+            } catch (e) {
+                prunedAccounts = [];
+            }
+        }
 
         const minerAddr = options.minerAddr || this.users[this.height % this._users.length].address;     // user[0] created genesis, hence we start with user[1]
-        const body = new BlockBody(minerAddr, transactions);
+        const body = new BlockBody(minerAddr, transactions, new Uint8Array(0), prunedAccounts);
 
         const version = options.version || BlockHeader.Version.CURRENT_VERSION;
         const nBits = options.nBits || BlockUtils.targetToCompact(await this.getNextTarget());
         const interlink = options.interlink || await this.head.getNextInterlink(BlockUtils.compactToTarget(nBits), version);
 
         const prevHash = options.prevHash || this.headHash;
-        const interlinkHash = options.interlinkHash || await interlink.hash();
-        const bodyHash = options.bodyHash || await body.hash();
+        const interlinkHash = options.interlinkHash || interlink.hash();
+        const bodyHash = options.bodyHash || body.hash();
 
         let accountsHash = options.accountsHash;
         if (!accountsHash) {
             const accountsTx = await this._accounts.transaction();
             try {
-                await accountsTx.commitBlockBody(body, height, this._transactionsCache);
+                await accountsTx.commitBlockBody(body, height, this._transactionCache);
                 accountsHash = await accountsTx.hash();
             } catch (e) {
                 // The block is invalid, fill with broken accountsHash
@@ -178,7 +186,7 @@ class TestBlockchain extends FullChain {
     }
 
     async setOrMineBlockNonce(block, superblockLevel) {
-        let id = (await block.hash()).toBase64();
+        let id = block.hash().toBase64();
         const mineSuperblock = typeof superblockLevel === 'number';
         if (mineSuperblock) {
             id += `@${superblockLevel}`;
@@ -197,6 +205,7 @@ class TestBlockchain extends FullChain {
             await TestBlockchain.mineBlock(block, superblockLevel);
 
             TestBlockchain.NONCES[id] = block.header.nonce;
+            console.log(`Mine on demand: Assigned ${id} to ${block.header.nonce}`);
         } else if (this._invalidNonce) {
             console.log(`No nonce available for block ${id}, but accepting invalid nonce.`);
         } else {
@@ -238,7 +247,7 @@ class TestBlockchain extends FullChain {
         const keyPairs = TestBlockchain.USERS.slice(0, count)
             .map(encodedKeyPair => KeyPair.unserialize(BufferUtils.fromBase64(encodedKeyPair)));
         for (const keyPair of keyPairs) {
-            const address = await keyPair.publicKey.toAddress(); // eslint-disable-line no-await-in-loop
+            const address = keyPair.publicKey.toAddress(); // eslint-disable-line no-await-in-loop
             users.push(TestBlockchain.generateUser(keyPair, address));
         }
         return users;
@@ -251,12 +260,12 @@ class TestBlockchain extends FullChain {
         // genesis block will send the first miner reward to it.
         // This keypair is the one that the miner address of the test genesis block in DummyData.spec.js belongs to.
         const keys = KeyPair.unserialize(BufferUtils.fromBase64(TestBlockchain.USERS[0]));
-        const address = await keys.publicKey.toAddress();
+        const address = keys.publicKey.toAddress();
         users.push(TestBlockchain.generateUser(keys, address));
 
         for (let i = 1; i < count; i++) {
             const keyPair = await KeyPair.generate(); //eslint-disable-line no-await-in-loop
-            const address = await keyPair.publicKey.toAddress(); //eslint-disable-line no-await-in-loop
+            const address = keyPair.publicKey.toAddress(); //eslint-disable-line no-await-in-loop
 
             users.push(TestBlockchain.generateUser(keyPair, address));
         }

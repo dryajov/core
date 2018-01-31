@@ -1,4 +1,4 @@
-class HashedTimeLockedContract extends Account {
+class HashedTimeLockedContract extends Contract {
     /**
      * @param {number} balance
      * @param {Address} sender
@@ -29,6 +29,24 @@ class HashedTimeLockedContract extends Account {
         this._timeout = timeout;
         /** @type {number} */
         this._totalAmount = totalAmount;
+    }
+
+    /**
+     * @param {number} balance
+     * @param {number} blockHeight
+     * @param {Transaction} transaction
+     */
+    static create(balance, blockHeight, transaction) {
+        const buf = new SerialBuffer(transaction.data);
+
+        const sender = Address.unserialize(buf);
+        const recipient = Address.unserialize(buf);
+        const hashAlgorithm = /** @type {Hash.Algorithm} */ buf.readUint8();
+        const hashRoot = Hash.unserialize(buf, hashAlgorithm);
+        const hashCount = buf.readUint8();
+        const timeout = buf.readUint32();
+
+        return new HashedTimeLockedContract(balance, sender, recipient, hashRoot, hashCount, timeout);
     }
 
     /**
@@ -114,7 +132,24 @@ class HashedTimeLockedContract extends Account {
     }
 
     toString() {
-        return `HashedTimeLockedContract{sender=${this._sender.toUserFriendlyAddress(false)}, recipient=${this._sender.toUserFriendlyAddress(false)} amount=${this._totalAmount}/${this._hashCount}, timeout=${this._timeout}, balance=${this._balance}}`;
+        return `HashedTimeLockedContract{balance=${this._balance}, sender=${this._sender.toUserFriendlyAddress(false)}, recipient=${this._sender.toUserFriendlyAddress(false)}, amount=${this._totalAmount}/${this._hashCount}, timeout=${this._timeout}}`;
+    }
+
+    /**
+     * Check if two Accounts are the same.
+     * @param {Account} o Object to compare with.
+     * @return {boolean} Set if both objects describe the same data.
+     */
+    equals(o) {
+        return o instanceof HashedTimeLockedContract
+            && this._type === o._type
+            && this._balance === o._balance
+            && this._sender.equals(o._sender)
+            && this._recipient.equals(o._recipient)
+            && this._hashRoot.equals(o._hashRoot)
+            && this._hashCount.equals(o._hashCount)
+            && this._timeout.equals(o._timeout)
+            && this._totalAmount.equals(o._totalAmount);
     }
 
     /**
@@ -127,40 +162,41 @@ class HashedTimeLockedContract extends Account {
             const type = buf.readUint8();
             switch (type) {
                 case HashedTimeLockedContract.ProofType.REGULAR_TRANSFER: {
-                    // pre-image
                     const hashAlgorithm = /** @type {Hash.Algorithm} */ buf.readUint8();
                     const hashDepth = buf.readUint8();
-                    const rootHash = Hash.unserialize(buf, hashAlgorithm);
-                    let hashTmp = Hash.unserialize(buf, hashAlgorithm);
+                    const hashRoot = Hash.unserialize(buf, hashAlgorithm);
+                    const preImage = Hash.unserialize(buf, hashAlgorithm);
+
+                    // Verify that the preImage hashed hashDepth times matches the _provided_ hashRoot.
+                    let hashTmp = preImage;
                     for (let i = 0; i < hashDepth; ++i) {
                         hashTmp = await Hash.compute(hashTmp.array, hashAlgorithm);
                     }
-                    if (!rootHash.equals(hashTmp)) {
+                    if (!hashRoot.equals(hashTmp)) {
                         return false;
                     }
 
-                    // signature proof of the htlc recipient
-                    if (!(await SignatureProof.unserialize(buf).verify(transaction.recipient, transaction.serializeContent()))) {
+                    // Signature proof of the HTLC recipient
+                    if (!(await SignatureProof.unserialize(buf).verify(null, transaction.serializeContent()))) {
                         return false;
                     }
                     break;
                 }
                 case HashedTimeLockedContract.ProofType.EARLY_RESOLVE: {
-                    // signature proof of the htlc recipient
-                    const htlcRecipientAddress = Address.unserialize(buf);
-                    if (!(await SignatureProof.unserialize(buf).verify(htlcRecipientAddress, transaction.serializeContent()))) {
+                    // Signature proof of the HTLC recipient
+                    if (!(await SignatureProof.unserialize(buf).verify(null, transaction.serializeContent()))) {
                         return false;
                     }
 
-                    // signature proof of the htlc creator
-                    if (!(await SignatureProof.unserialize(buf).verify(transaction.recipient, transaction.serializeContent()))) {
+                    // Signature proof of the HTLC creator
+                    if (!(await SignatureProof.unserialize(buf).verify(null, transaction.serializeContent()))) {
                         return false;
                     }
                     break;
                 }
                 case HashedTimeLockedContract.ProofType.TIMEOUT_RESOLVE:
-                    // signature proof of the htlc creator
-                    if (!(await SignatureProof.unserialize(buf).verify(transaction.recipient, transaction.serializeContent()))) {
+                    // Signature proof of the HTLC creator
+                    if (!(await SignatureProof.unserialize(buf).verify(null, transaction.serializeContent()))) {
                         return false;
                     }
                     break;
@@ -168,6 +204,7 @@ class HashedTimeLockedContract extends Account {
                     return false;
             }
 
+            // Reject overlong proof.
             if (buf.readPos !== buf.byteLength) {
                 return false;
             }
@@ -182,28 +219,24 @@ class HashedTimeLockedContract extends Account {
      * @param {Transaction} transaction
      * @return {Promise.<boolean>}
      */
-    static async verifyIncomingTransaction(transaction) {
+    static verifyIncomingTransaction(transaction) {
         try {
             const buf = new SerialBuffer(transaction.data);
-            const recipient = Address.unserialize(buf);
+
+            Address.unserialize(buf); // sender address
+            Address.unserialize(buf); // recipient address
             const hashAlgorithm = /** @type {Hash.Algorithm} */ buf.readUint8();
-            const hashRoot = Hash.unserialize(buf, hashAlgorithm);
-            const hashCount = buf.readUint8();
-            const timeout = buf.readUint32();
+            Hash.unserialize(buf, hashAlgorithm);
+            buf.readUint8(); // hash count
+            buf.readUint32(); // timeout
 
             if (buf.readPos !== buf.byteLength) {
-                return false;
+                return Promise.resolve(false);
             }
 
-            const contract = new HashedTimeLockedContract(transaction.value, transaction.sender, recipient, hashRoot, hashCount, timeout);
-            const hash = await Hash.blake2b(contract.serialize());
-            if (!transaction.recipient.equals(Address.fromHash(hash))) {
-                return false;
-            }
-
-            return true; // Accept
+            return Contract.verifyIncomingTransaction(transaction);
         } catch (e) {
-            return false;
+            return Promise.resolve(false);
         }
     }
 
@@ -228,17 +261,24 @@ class HashedTimeLockedContract extends Account {
         let minCap = 0;
         switch (type) {
             case HashedTimeLockedContract.ProofType.REGULAR_TRANSFER: {
-                if (!transaction.recipient.equals(this._recipient)) {
-                    throw new Error('Proof Error!');
-                }
-
+                // Check that the contract has not expired yet.
                 if (this._timeout < blockHeight) {
                     throw new Error('Proof Error!');
                 }
 
+                // Check that the provided hashRoot is correct.
                 const hashAlgorithm = /** @type {Hash.Algorithm} */ buf.readUint8();
                 const hashDepth = buf.readUint8();
-                if (!Hash.unserialize(buf, hashAlgorithm).equals(this._hashRoot)) {
+                const hashRoot = Hash.unserialize(buf, hashAlgorithm);
+                if (!hashRoot.equals(this._hashRoot)) {
+                    throw new Error('Proof Error!');
+                }
+
+                // Ignore the preImage.
+                Hash.unserialize(buf, hashAlgorithm);
+
+                // Verify that the transaction is signed by the authorized recipient.
+                if (!SignatureProof.unserialize(buf).isSignedBy(this._recipient)) {
                     throw new Error('Proof Error!');
                 }
 
@@ -247,22 +287,22 @@ class HashedTimeLockedContract extends Account {
                 break;
             }
             case HashedTimeLockedContract.ProofType.EARLY_RESOLVE: {
-                if (!transaction.recipient.equals(this._sender)) {
+                if (!SignatureProof.unserialize(buf).isSignedBy(this._recipient)) {
                     throw new Error('Proof Error!');
                 }
 
-                if (!Address.unserialize(buf).equals(this._recipient)) {
+                if (!SignatureProof.unserialize(buf).isSignedBy(this._sender)) {
                     throw new Error('Proof Error!');
                 }
 
                 break;
             }
             case HashedTimeLockedContract.ProofType.TIMEOUT_RESOLVE: {
-                if (!transaction.recipient.equals(this._sender)) {
+                if (this._timeout >= blockHeight) {
                     throw new Error('Proof Error!');
                 }
 
-                if (this._timeout >= blockHeight) {
+                if (!SignatureProof.unserialize(buf).isSignedBy(this._sender)) {
                     throw new Error('Proof Error!');
                 }
 
@@ -271,12 +311,14 @@ class HashedTimeLockedContract extends Account {
             default:
                 throw new Error('Proof Error!');
         }
+
         if (!revert) {
             const newBalance = this._balance - transaction.value - transaction.fee;
             if (newBalance < minCap) {
                 throw new Error('Balance Error!');
             }
         }
+
         return super.withOutgoingTransaction(transaction, blockHeight, transactionsCache, revert);
     }
 
@@ -288,21 +330,7 @@ class HashedTimeLockedContract extends Account {
      * @return {Account}
      */
     withIncomingTransaction(transaction, blockHeight, revert = false) {
-        if (this === HashedTimeLockedContract.INITIAL) {
-            const buf = new SerialBuffer(transaction.data);
-            const recipient = Address.unserialize(buf);
-            const hashAlgorithm = /** @type {Hash.Algorithm} */ buf.readUint8();
-            const hashRoot = Hash.unserialize(buf, hashAlgorithm);
-            const hashCount = buf.readUint8();
-            const timeout = buf.readUint32();
-
-            return new HashedTimeLockedContract(transaction.value, transaction.sender, recipient, hashRoot, hashCount, timeout);
-        } else if (revert && transaction.data.length > 0) {
-            return HashedTimeLockedContract.INITIAL;
-        } else {
-            // No incoming transactions after creation
-            throw new Error('Data Error!');
-        }
+        throw new Error('Illegal incoming transaction');
     }
 }
 
@@ -311,6 +339,6 @@ HashedTimeLockedContract.ProofType = {
     EARLY_RESOLVE: 2,
     TIMEOUT_RESOLVE: 3
 };
-HashedTimeLockedContract.INITIAL = new HashedTimeLockedContract();
+
 Account.TYPE_MAP.set(Account.Type.HTLC, HashedTimeLockedContract);
 Class.register(HashedTimeLockedContract);

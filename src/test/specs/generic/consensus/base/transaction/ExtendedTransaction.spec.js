@@ -1,7 +1,6 @@
-
 describe('ExtendedTransaction', () => {
     const senderPubKey = PublicKey.unserialize(BufferUtils.fromBase64(Dummy.publicKey1));
-    let senderAddress = null;
+    let senderAddress;
     const recipientAddress = Address.unserialize(BufferUtils.fromBase64(Dummy.address1));
     const value = 1;
     const fee = 1;
@@ -9,17 +8,14 @@ describe('ExtendedTransaction', () => {
     const proof = BufferUtils.fromAscii('ABCD');
     const data = BufferUtils.fromAscii('EFGH');
 
-    beforeAll((done) => {
-        (async () => {
-            await Crypto.prepareSyncCryptoWorker();
-            senderAddress = senderPubKey.toAddressSync();
-        })().then(done, done.fail);
+    beforeAll(() => {
+        senderAddress = senderPubKey.toAddress();
     });
 
     it('is correctly created', () => {
-        const tx1 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, value, fee, validityStartHeight, data, proof);
+        const tx1 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, value, fee, validityStartHeight, Transaction.Flag.NONE, data, proof);
 
-        expect(tx1.type).toEqual(Transaction.Type.EXTENDED);
+        expect(tx1._format).toEqual(Transaction.Format.EXTENDED);
         expect(tx1.sender.equals(senderAddress)).toEqual(true);
         expect(tx1.senderType).toEqual(Account.Type.BASIC);
         expect(tx1.recipient.equals(recipientAddress)).toEqual(true);
@@ -32,10 +28,10 @@ describe('ExtendedTransaction', () => {
     });
 
     it('is serializable and unserializable', () => {
-        const tx1 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, value, fee, validityStartHeight, data, proof);
+        const tx1 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddress, Account.Type.BASIC, value, fee, validityStartHeight, Transaction.Flag.NONE, data, proof);
         const tx2 = Transaction.unserialize(tx1.serialize());
 
-        expect(tx2.type).toEqual(Transaction.Type.EXTENDED);
+        expect(tx2._format).toEqual(Transaction.Format.EXTENDED);
         expect(tx2.sender.equals(senderAddress)).toEqual(true);
         expect(tx2.senderType).toEqual(Account.Type.BASIC);
         expect(tx2.recipient.equals(recipientAddress)).toEqual(true);

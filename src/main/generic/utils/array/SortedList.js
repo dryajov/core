@@ -1,6 +1,6 @@
 class SortedList {
-    constructor(compare) {
-        this._list = [];
+    constructor(sortedList = [], compare) {
+        this._list = sortedList;
         this._compare = compare || SortedList._compare;
     }
 
@@ -79,6 +79,10 @@ class SortedList {
 
     values() {
         return this._list;
+    }
+
+    copy() {
+        return new SortedList(this._list.slice(), this._compare);
     }
 
     /** @type {number} */

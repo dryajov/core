@@ -303,7 +303,7 @@
                 value = Nimiq.Policy.coinsToSatoshis(value);
                 fee = Nimiq.Policy.coinsToSatoshis(fee);
 
-                var waitingTransactions = $.mempool.getWaitingTransactions($.wallet.publicKey.toAddressSync());
+                var waitingTransactions = $.mempool.getPendingTransactions($.wallet.publicKey.toAddress());
 
                 if (!account || account.balance < value + fee + waitingTransactions.map(t => t.value + t.fee).reduce((a, b) => a + b, 0)) {
                     elValue.className = 'error';
@@ -354,7 +354,7 @@
         _updateBalance() {
             if ($.consensus.established) {
                 $.consensus.getAccount($.wallet.address, $.blockchain.headHash).then(function(account) {
-                    account = account || Nimiq.BasicAccount.INITIAL;
+                    account = account || Nimiq.Account.INITIAL;
                     this._wltBalance.innerText = Nimiq.Policy.satoshisToCoins(account.balance).toFixed(8);
                 }.bind(this));
             }
@@ -409,7 +409,9 @@
             $.network = $.consensus.network;
 
             // XXX Legacy components
-            $.wallet = await Nimiq.Wallet.getPersistent();
+            $.walletStore = await new Nimiq.WalletStore();
+            // Load or create main wallet.
+            $.wallet = await $.walletStore.getDefault();
 
             bcTitle.classList.add('connecting');
             $.network.connect();

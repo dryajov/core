@@ -51,7 +51,7 @@ class FullChain extends BaseChain {
         this._proof = null;
 
         /** @type {TransactionCache} */
-        this._transactionsCache = new TransactionCache();
+        this._transactionCache = new TransactionCache();
 
         /** @type {TransactionStore} */
         this._transactionStore = transactionStore;
@@ -83,7 +83,7 @@ class FullChain extends BaseChain {
             await tx.setHead(Block.GENESIS.HASH);
             await tx.commit();
 
-            await this._accounts.commitBlock(Block.GENESIS, this._transactionsCache);
+            await this._accounts.commitBlock(Block.GENESIS, this._transactionCache);
         }
 
         return this;
@@ -106,7 +106,7 @@ class FullChain extends BaseChain {
      */
     async _pushBlock(block) {
         // Check if we already know this block.
-        const hash = await block.hash();
+        const hash = block.hash();
         const knownBlock = await this._store.getBlock(hash);
         if (knownBlock) {
             Log.v(FullChain, `Ignoring known block ${hash}`);
@@ -210,12 +210,12 @@ class FullChain extends BaseChain {
     async _extend(blockHash, chainData) {
         const accountsTx = await this._accounts.transaction();
         try {
-            await accountsTx.commitBlock(chainData.head, this._transactionsCache);
+            await accountsTx.commitBlock(chainData.head, this._transactionCache);
         } catch (e) {
             // AccountsHash mismatch. This can happen if someone gives us an invalid block.
             // TODO error handling
             Log.w(FullChain, `Rejecting block - failed to commit to AccountsTree: ${e.message || e}`);
-            accountsTx.abort();
+            accountsTx.abort().catch(Log.w.tag(FullChain));
             return false;
         }
 
@@ -237,7 +237,7 @@ class FullChain extends BaseChain {
         await this._saveSnapshot(blockHash);
 
         // Update transactions cache.
-        this._transactionsCache.pushBlock(chainData.head);
+        this._transactionCache.pushBlock(chainData.head);
 
         // Update chain proof if we have cached one.
         if (this._proof) {
@@ -292,7 +292,7 @@ class FullChain extends BaseChain {
 
         // Validate all accountsHashes on the fork. Revert the AccountsTree to the common ancestor state first.
         const accountsTx = await this._accounts.transaction(false);
-        const transactionsTx = this._transactionsCache.clone();
+        const transactionsTx = this._transactionCache.clone();
         // Also update transactions in index.
         const transactionStoreTx = this._transactionStore ? this._transactionStore.transaction() : null;
 
@@ -310,9 +310,9 @@ class FullChain extends BaseChain {
                 }
             } catch (e) {
                 Log.e(FullChain, 'Failed to revert main chain while rebranching', e);
-                accountsTx.abort();
+                accountsTx.abort().catch(Log.w.tag(FullChain));
                 if (this._transactionStore) {
-                    transactionStoreTx.abort();
+                    transactionStoreTx.abort().catch(Log.w.tag(FullChain));
                 }
                 return false;
             }
@@ -342,9 +342,9 @@ class FullChain extends BaseChain {
                 // A fork block is invalid.
                 // TODO delete invalid block and its successors from store.
                 Log.e(FullChain, 'Failed to apply fork block while rebranching', e);
-                accountsTx.abort();
+                accountsTx.abort().catch(Log.w.tag(FullChain));
                 if (this._transactionStore) {
-                    transactionStoreTx.abort();
+                    transactionStoreTx.abort().catch(Log.w.tag(FullChain));
                 }
                 return false;
             }
@@ -377,7 +377,7 @@ class FullChain extends BaseChain {
         } else {
             await JDB.JungleDB.commitCombined(chainTx.tx, accountsTx.tx);
         }
-        this._transactionsCache = transactionsTx;
+        this._transactionCache = transactionsTx;
 
         // Reset chain proof. We don't recompute the chain proof here, but do it lazily the next time it is needed.
         // TODO modify chain proof directly, don't recompute.
@@ -454,7 +454,8 @@ class FullChain extends BaseChain {
                 matches.push(transaction);
             }
         }
-        const proof = await MerkleProof.compute([block.minerAddr, block.body.extraData, ...block.transactions], matches);
+
+        const proof = MerkleProof.compute(block.body.getMerkleLeafs(), matches);
         return new TransactionsProof(matches, proof);
     }
 
@@ -516,7 +517,7 @@ class FullChain extends BaseChain {
             let snapshot = null;
             if (!this._snapshots.contains(blockHash)) {
                 const tx = await this._accounts.transaction();
-                const transactionsTx = this._transactionsCache.clone();
+                const transactionsTx = this._transactionCache.clone();
                 let currentHash = this._headHash;
                 // Save all snapshots up to blockHash (and stop when its predecessor would be next).
                 while (!block.prevHash.equals(currentHash)) {
@@ -601,7 +602,7 @@ class FullChain extends BaseChain {
 
     /** @type {TransactionCache} */
     get transactionsCache() {
-        return this._transactionsCache;
+        return this._transactionCache;
     }
 
     /**

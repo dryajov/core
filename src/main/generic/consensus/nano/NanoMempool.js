@@ -1,10 +1,18 @@
 class NanoMempool extends Observable {
-    constructor() {
+    /**
+     * @param {IBlockchain} blockchain
+     */
+    constructor(blockchain) {
         super();
+
+        /** @type {IBlockchain} */
+        this._blockchain = blockchain;
 
         // Our pool of transactions.
         /** @type {HashMap.<Hash, Transaction>} */
-        this._transactions = new HashMap();
+        this._transactionsByHash = new HashMap();
+        /** @type {HashMap.<Address, MempoolTransactionSet>} */
+        this._transactionSetByAddress = new HashMap();
     }
 
     /**
@@ -14,9 +22,15 @@ class NanoMempool extends Observable {
      */
     async pushTransaction(transaction) {
         // Check if we already know this transaction.
-        const hash = await transaction.hash();
-        if (this._transactions.contains(hash)) {
+        const hash = transaction.hash();
+        if (this._transactionsByHash.contains(hash)) {
             Log.v(Mempool, () => `Ignoring known transaction ${hash.toBase64()}`);
+            return false;
+        }
+
+        // Check validity based on startHeight.
+        if (this._blockchain.height >= transaction.validityStartHeight + Policy.TRANSACTION_VALIDITY_WINDOW) {
+            Log.v(Mempool, () => `Ignoring expired transaction ${hash.toBase64()}`);
             return false;
         }
 
@@ -25,13 +39,11 @@ class NanoMempool extends Observable {
             return false;
         }
 
-        // Evict the oldest transactions from the mempool if it grows too large.
-        if (this._transactions.length >= NanoMempool.TRANSACTIONS_MAX_COUNT) {
-            this._evictTransactions();
-        }
-
         // Transaction is valid, add it to the mempool.
-        this._transactions.put(hash, transaction);
+        this._transactionsByHash.put(hash, transaction);
+        const set = this._transactionSetByAddress.get(transaction.sender) || new MempoolTransactionSet();
+        set.add(transaction);
+        this._transactionSetByAddress.put(transaction.sender, set);
 
         // Tell listeners about the new transaction we received.
         this.fire('transaction-added', transaction);
@@ -44,7 +56,7 @@ class NanoMempool extends Observable {
      * @returns {Transaction}
      */
     getTransaction(hash) {
-        return this._transactions.get(hash);
+        return this._transactionsByHash.get(hash);
     }
 
     /**
@@ -52,29 +64,67 @@ class NanoMempool extends Observable {
      * @returns {Array.<Transaction>}
      */
     getTransactions(maxCount = 5000) {
-        // TODO Add logic here to pick the "best" transactions.
-        const transactions = [];
-        for (const transaction of this._transactions.values()) {
-            if (transactions.length >= maxCount) break;
-            transactions.push(transaction);
-        }
-        return transactions;
+        return this._transactionsByHash.values().sort((a, b) => a.compare(b)).slice(0, maxCount);
     }
 
     /**
+     * @param {Address} address
+     * @return {Array.<Transaction>}
+     */
+    getPendingTransactions(address) {
+        const set = this._transactionSetByAddress.get(address);
+        return set ? set.transactions : [];
+    }
+
+    /**
+     * @param {Block} block
+     * @param {Array.<Transaction>} transactions
+     */
+    changeHead(block, transactions) {
+        this._evictTransactions(block.height, transactions);
+    }
+
+    /**
+     * @param {number} blockHeight
+     * @param {Array.<Transaction>} transactions
      * @private
      */
-    _evictTransactions() {
-        const keyIterator = this._transactions.keyIterator();
-        let {value:hash, done} = keyIterator.next();
-        for (let i = 0; !done && i < NanoMempool.TRANSACTIONS_EVICT_COUNT; i++) {
-            /** @type {Transaction} */
-            this._transactions.remove(hash);
+    _evictTransactions(blockHeight, transactions) {
+        // Remove expired transactions.
+        for (const /** @type {Transaction} */ tx of this._transactionsByHash.values()) {
+            const txHash = tx.hash();
+            if (blockHeight >= tx.validityStartHeight + Policy.TRANSACTION_VALIDITY_WINDOW) {
+                this._transactionsByHash.remove(txHash);
 
-            ({value:hash, done} = keyIterator.next());
+                /** @type {MempoolTransactionSet} */
+                const set = this._transactionSetByAddress.get(tx.sender);
+                set.remove(tx);
+
+                if (set.length === 0) {
+                    this._transactionSetByAddress.remove(tx.sender);
+                }
+
+                this.fire('transaction-expired', tx);
+            }
+        }
+
+        // Remove mined transactions.
+        for (const /** @type {Transaction} */ tx of transactions) {
+            const txHash = tx.hash();
+            if (this._transactionsByHash.contains(txHash)) {
+                this._transactionsByHash.remove(txHash);
+
+                /** @type {MempoolTransactionSet} */
+                const set = this._transactionSetByAddress.get(tx.sender);
+                set.remove(tx);
+
+                if (set.length === 0) {
+                    this._transactionSetByAddress.remove(tx.sender);
+                }
+
+                this.fire('transaction-mined', tx);
+            }
         }
     }
 }
-NanoMempool.TRANSACTIONS_MAX_COUNT = 50000;
-NanoMempool.TRANSACTIONS_EVICT_COUNT = 5000;
 Class.register(NanoMempool);

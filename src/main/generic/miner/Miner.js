@@ -2,6 +2,7 @@ class Miner extends Observable {
     /**
      * @param {IBlockchain} blockchain
      * @param {Mempool} mempool
+     * @param {Accounts} accounts
      * @param {Time} time
      * @param {Address} minerAddress
      * @param {Uint8Array} [extraData=new Uint8Array(0)]
@@ -9,12 +10,14 @@ class Miner extends Observable {
      * @listens Mempool#transaction-added
      * @listens Mempool#transaction-ready
      */
-    constructor(blockchain, mempool, time, minerAddress, extraData = new Uint8Array(0)) {
+    constructor(blockchain, mempool, accounts, time, minerAddress, extraData = new Uint8Array(0)) {
         super();
         /** @type {IBlockchain} */
         this._blockchain = blockchain;
         /** @type {Mempool} */
         this._mempool = mempool;
+        /** @type {Accounts} */
+        this._accounts = accounts;
         /** @type {Time} */
         this._time = time;
         /** @type {Address} */
@@ -136,7 +139,7 @@ class Miner extends Observable {
         this.fire('start', this);
 
         // Kick off the mining process.
-        this._startWork().catch(Miner._log);
+        this._startWork().catch(Log.w.tag(Miner));
     }
 
     async _startWork() {
@@ -154,7 +157,7 @@ class Miner extends Observable {
 
             Log.i(Miner, `Starting work on ${block.header}, transactionCount=${block.transactionCount}, hashrate=${this._hashrate} H/s`);
 
-            this._workerPool.startMiningOnBlock(block).catch(Miner._log);
+            this._workerPool.startMiningOnBlock(block).catch(Log.w.tag(Miner));
         } finally {
             this._restarting = false;
         }
@@ -178,7 +181,7 @@ class Miner extends Observable {
                     // Push block into blockchain.
                     if ((await this._blockchain.pushBlock(obj.block)) < 0) {
                         this._submittingBlock = false;
-                        this._startWork().catch(Miner._log);
+                        this._startWork().catch(Log.w.tag(Miner));
                         return;
                     } else {
                         this._submittingBlock = false;
@@ -189,16 +192,8 @@ class Miner extends Observable {
             }
         }
         if (this._mempoolChanged && this._lastRestart + Miner.MIN_TIME_ON_BLOCK < Date.now()) {
-            this._startWork().catch(Miner._log);
+            this._startWork().catch(Log.w.tag(Miner));
         }
-    }
-
-    /**
-     * @param {Error|*} e
-     * @private
-     */
-    static _log(e) {
-        Log.w(Miner, e.message || e);
     }
 
     /**
@@ -208,7 +203,7 @@ class Miner extends Observable {
     async getNextBlock() {
         const nextTarget = await this._blockchain.getNextTarget();
         const interlink = await this._getNextInterlink(nextTarget);
-        const body = this._getNextBody(interlink.serializedSize);
+        const body = await this._getNextBody(interlink.serializedSize);
         const header = await this._getNextHeader(nextTarget, interlink, body);
         return new Block(header, interlink, body);
     }
@@ -222,11 +217,11 @@ class Miner extends Observable {
      */
     async _getNextHeader(nextTarget, interlink, body) {
         const prevHash = this._blockchain.headHash;
-        const interlinkHash = await interlink.hash();
+        const interlinkHash = interlink.hash();
         const height = this._blockchain.height + 1;
 
         // Compute next accountsHash.
-        const accounts = await this._blockchain.accounts.transaction();
+        const accounts = await this._accounts.transaction();
         let accountsHash;
         try {
             await accounts.commitBlockBody(body, height, this._blockchain.transactionsCache);
@@ -237,7 +232,7 @@ class Miner extends Observable {
             throw new Error(`Invalid block body: ${e.message}`);
         }
 
-        const bodyHash = await body.hash();
+        const bodyHash = body.hash();
         const timestamp = this._getNextTimestamp();
         const nBits = BlockUtils.targetToCompact(nextTarget);
         const nonce = Math.round(Math.random() * 100000);
@@ -258,13 +253,14 @@ class Miner extends Observable {
      * @return {BlockBody}
      * @private
      */
-    _getNextBody(interlinkSize) {
+    async _getNextBody(interlinkSize) {
         const maxSize = Policy.BLOCK_SIZE_MAX
             - BlockHeader.SERIALIZED_SIZE
             - interlinkSize
             - BlockBody.getMetadataSize(this._extraData);
-        const transactions = this._mempool.getTransactionsForBlock(maxSize);
-        return new BlockBody(this._address, transactions, this._extraData);
+        const transactions = await this._mempool.getTransactionsForBlock(maxSize);
+        const prunedAccounts = await this._accounts.gatherToBePrunedAccounts(transactions, this._blockchain.height + 1, this._blockchain.transactionsCache);
+        return new BlockBody(this._address, transactions, this._extraData, prunedAccounts);
     }
 
     /**

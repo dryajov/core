@@ -69,9 +69,7 @@ class Account {
      * @return {boolean} Set if both objects describe the same data.
      */
     equals(o) {
-        return o instanceof Account
-            && this._type === o._type
-            && this._balance === o._balance;
+        return BufferUtils.equals(this.serialize(), o.serialize());
     }
 
     toString() {
@@ -88,44 +86,6 @@ class Account {
     /** @type {Account.Type} */
     get type() {
         return this._type;
-    }
-
-    /**
-     * @param {Array.<Transaction>} transactions
-     * @param {number} blockHeight
-     * @param {TransactionCache} transactionsCache
-     * @param {boolean} silent
-     * @return {Promise.<boolean>}
-     */
-    verifyOutgoingTransactionSet(transactions, blockHeight, transactionsCache, silent = false) {
-        let account = this;
-        for (let i = 0; i < transactions.length; ++i) {
-            const tx = transactions[i];
-            if (account._type !== tx.senderType) {
-                if (!silent) Log.w(Account, 'Rejected transaction - sender type must match account type');
-                return Promise.resolve(false);
-            }
-            if (blockHeight < tx.validityStartHeight
-                || blockHeight >= tx.validityStartHeight + Policy.TRANSACTION_VALIDITY_WINDOW) {
-                if (!silent) Log.d(Account, 'Rejected transaction - outside validity window', tx);
-                return Promise.resolve(false);
-            }
-            if (transactionsCache.containsTransaction(tx)) {
-                if (!silent) Log.d(Account, 'Rejected transaction - already spent', tx);
-                return Promise.resolve(false);
-            }
-            if (account._balance < tx.value + tx.fee) {
-                if (!silent) Log.w(Account, 'Rejected transaction - insufficient funds', tx);
-                return Promise.resolve(false);
-            }
-            try {
-                account = account.withOutgoingTransaction(tx, blockHeight, transactionsCache);
-            } catch (e) {
-                if (!silent) Log.w(Account, `Rejected transaction - ${e.message || e}`, tx);
-                return Promise.resolve(false);
-            }
-        }
-        return Promise.resolve(true);
     }
 
     /**
@@ -186,15 +146,33 @@ class Account {
     }
 
     /**
+     * @param {Transaction} transaction
+     * @param {number} blockHeight
+     * @param {boolean} [revert]
+     * @return {Account}
+     */
+    withContractCommand(transaction, blockHeight, revert = false) {
+        throw new Error('Not yet implemented');
+    }
+
+    /**
      * @return {boolean}
      */
     isInitial() {
-        return this._balance === 0;
+        return this === Account.INITIAL;
+    }
+
+    /**
+     * @return {boolean}
+     */
+    isToBePruned() {
+        return this._balance === 0 && !this.isInitial();
     }
 }
 
 /**
  * Enum for Account types.
+ * Non-zero values are contracts.
  * @enum
  */
 Account.Type = {
@@ -205,7 +183,7 @@ Account.Type = {
     BASIC: 0,
     /**
      * Account with vesting functionality.
-     * @see {VestingAccount}
+     * @see {VestingContract}
      */
     VESTING: 1,
     /**
@@ -215,7 +193,7 @@ Account.Type = {
     HTLC: 2
 };
 /**
- * @type {Map.<Account.Type, {INITIAL: Account, copy: function(o: *):Account, unserialize: function(buf: SerialBuffer):Account, verifyOutgoingTransaction: function(transaction: Transaction):Promise.<boolean>, verifyIncomingTransaction: function(transaction: Transaction):Promise.<boolean>}>}
+ * @type {Map.<Account.Type, {copy: function(o: *):Account, unserialize: function(buf: SerialBuffer):Account, create: function(balance: number, blockHeight: number, transaction: Transaction):Account, verifyOutgoingTransaction: function(transaction: Transaction):Promise.<boolean>, verifyIncomingTransaction: function(transaction: Transaction):Promise.<boolean>}>}
  */
 Account.TYPE_MAP = new Map();
 

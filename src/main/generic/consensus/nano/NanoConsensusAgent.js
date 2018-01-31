@@ -42,7 +42,21 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         peer.channel.on('get-chain-proof', msg => this._onGetChainProof(msg));
 
         // Subscribe to all announcements from the peer.
-        this._peer.channel.subscribe(Subscription.ANY);
+        /** @type {Subscription} */
+        this._localSubscription = Subscription.BLOCKS_ONLY;
+        this._peer.channel.subscribe(this._localSubscription);
+    }
+
+    /**
+     * @param {Array.<Address>} addresses
+     */
+    subscribeAccounts(addresses) {
+        this._localSubscription = Subscription.fromAddresses(addresses);
+        this._peer.channel.subscribe(Subscription.BLOCKS_ONLY);
+        
+        this._timers.resetTimeout('subscription-change', () => {
+            this._peer.channel.subscribe(this._localSubscription);
+        }, NanoConsensusAgent.SUBSCRIPTION_CHANGE_THROTTLE);
     }
 
     /**
@@ -220,7 +234,9 @@ class NanoConsensusAgent extends BaseConsensusAgent {
      * @override
      */
     _processTransaction(hash, transaction) {
-        // TODO send reject message if we don't like the transaction
+        if (!this._localSubscription.matchesTransaction(transaction)) {
+            this._peer.channel.ban('received transaction not matching our subscription');
+        }
         return this._mempool.pushTransaction(transaction);
     }
 
@@ -316,7 +332,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
 
         // Verify the proof.
         const proof = msg.proof;
-        if (!(await proof.verify())) {
+        if (!proof.verify()) {
             Log.w(NanoConsensusAgent, `Invalid AccountsProof received from ${this._peer.peerAddress}`);
             // TODO ban instead?
             this._peer.channel.close('Invalid AccountsProof');
@@ -325,7 +341,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         }
 
         // Check that the proof root hash matches the accountsHash in the reference block.
-        const rootHash = await proof.root();
+        const rootHash = proof.root();
         const block = await this._blockchain.getBlock(blockHash);
         if (!block.accountsHash.equals(rootHash)) {
             Log.w(NanoConsensusAgent, `Invalid AccountsProof (root hash) received from ${this._peer.peerAddress}`);
@@ -555,7 +571,7 @@ class NanoConsensusAgent extends BaseConsensusAgent {
         this._blockRequest = null;
 
         // Check if we asked for this specific block.
-        const hash = await msg.block.hash();
+        const hash = msg.block.hash();
         if (!hash.equals(blockHash)) {
             Log.w(NanoConsensusAgent, `Unexpected block received from ${this._peer.peerAddress}, discarding`);
             // TODO close/ban?
@@ -620,4 +636,5 @@ NanoConsensusAgent.CHAINPROOF_REQUEST_TIMEOUT = 1000 * 30;
 NanoConsensusAgent.ACCOUNTSPROOF_REQUEST_TIMEOUT = 1000 * 5;
 NanoConsensusAgent.TRANSACTIONSPROOF_REQUEST_TIMEOUT = 1000 * 10;
 NanoConsensusAgent.TRANSACTIONS_REQUEST_TIMEOUT = 1000 * 15;
+NanoConsensusAgent.SUBSCRIPTION_CHANGE_THROTTLE = 1000 * 2;
 Class.register(NanoConsensusAgent);

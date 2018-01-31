@@ -1,16 +1,5 @@
 class BlockBody {
     /**
-     * @param {BlockBody} o
-     * @returns {BlockBody}
-     */
-    static copy(o) {
-        if (!o) return o;
-        const minerAddr = Address.copy(o._minerAddr);
-        const transactions = o._transactions.map(it => Transaction.copy(it));
-        return new BlockBody(minerAddr, transactions, o.extraData);
-    }
-
-    /**
      * @param {Uint8Array} extraData
      * @returns {number}
      */
@@ -25,18 +14,21 @@ class BlockBody {
      * @param {Address} minerAddr
      * @param {Array.<Transaction>} transactions
      * @param {Uint8Array} [extraData]
+     * @param {Array.<PrunedAccount>} prunedAccounts
      */
-    constructor(minerAddr, transactions, extraData = new Uint8Array(0)) {
+    constructor(minerAddr, transactions, extraData = new Uint8Array(0), prunedAccounts = []) {
         if (!(minerAddr instanceof Address)) throw 'Malformed minerAddr';
         if (!Array.isArray(transactions) || transactions.some(it => !(it instanceof Transaction))) throw 'Malformed transactions';
         if (!(extraData instanceof Uint8Array) || !NumberUtils.isUint8(extraData.byteLength)) throw 'Malformed extraData';
 
         /** @type {Address} */
         this._minerAddr = minerAddr;
-        /** @type {Array.<Transaction>} */
-        this._transactions = transactions;
         /** @type {Uint8Array} */
         this._extraData = extraData;
+        /** @type {Array.<Transaction>} */
+        this._transactions = transactions;
+        /** @type {Array.<PrunedAccount>} */
+        this._prunedAccounts = prunedAccounts;
         /** @type {Hash} */
         this._hash = null;
     }
@@ -54,7 +46,12 @@ class BlockBody {
         for (let i = 0; i < numTransactions; i++) {
             transactions[i] = Transaction.unserialize(buf);
         }
-        return new BlockBody(minerAddr, transactions, extraData);
+        const numPrunedAccounts = buf.readUint16();
+        const prunedAccounts = [];
+        for (let i = 0; i < numPrunedAccounts; i++) {
+            prunedAccounts.push(PrunedAccount.unserialize(buf));
+        }
+        return new BlockBody(minerAddr, transactions, extraData, prunedAccounts);
     }
 
     /**
@@ -70,6 +67,10 @@ class BlockBody {
         for (const tx of this._transactions) {
             tx.serialize(buf);
         }
+        buf.writeUint16(this._prunedAccounts.length);
+        for (const acc of this._prunedAccounts) {
+            acc.serialize(buf);
+        }
         return buf;
     }
 
@@ -80,10 +81,12 @@ class BlockBody {
         let size = this._minerAddr.serializedSize
             + /*extraDataLength*/ 1
             + this._extraData.byteLength
-            + /*transactionsLength*/ 2;
+            + /*transactionsLength*/ 2
+            + /*prunedAccountsLength*/ 2;
         for (const tx of this._transactions) {
             size += tx.serializedSize;
         }
+        size += this._prunedAccounts.reduce((sum, acc) => sum + acc.serializedSize, 0);
         return size;
     }
 
@@ -108,16 +111,40 @@ class BlockBody {
             }
         }
 
+        let previousAcc = null;
+        for (const acc of this._prunedAccounts) {
+            // Ensure pruned accounts are ordered
+            if (previousAcc && acc.compare(previousAcc) > 0) {
+                Log.w(BlockBody, 'Invalid block - pruned accounts not ordered.');
+                return false;
+            }
+            previousAcc = acc;
+            
+            // Check that pruned accounts are actually supposed to be pruned
+            if (!acc.account.isToBePruned()) {
+                Log.w(BlockBody, 'Invalid block - invalid pruned account');
+                return false;
+            }
+        }
+
         // Everything checks out.
         return true;
     }
 
     /**
-     * @return {Promise.<Hash>}
+     * @returns {Array}
      */
-    async hash() {
+    getMerkleLeafs() {
+        return [this._minerAddr, this._extraData, ...this._transactions, ...this.prunedAccounts];
+    }
+
+    /**
+     * @return {Promise.<Hash>}
+     * @return {Hash}
+     */
+    hash() {
         if (!this._hash) {
-            this._hash = await MerkleTree.computeRoot([this._minerAddr, this._extraData, ...this._transactions]);
+            this._hash = MerkleTree.computeRoot(this.getMerkleLeafs());
         }
         return this._hash;
     }
@@ -153,5 +180,11 @@ class BlockBody {
     get transactionCount() {
         return this._transactions.length;
     }
+
+    /** @type {Array.<PrunedAccount>} */
+    get prunedAccounts() {
+        return this._prunedAccounts;
+    }
 }
+
 Class.register(BlockBody);

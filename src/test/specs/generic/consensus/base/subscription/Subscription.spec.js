@@ -1,6 +1,6 @@
 describe('Subscription', () => {
     const senderPubKey = PublicKey.unserialize(BufferUtils.fromBase64(Dummy.publicKey1));
-    let senderAddress = null;
+    let senderAddress;
     const recipientAddr = Address.unserialize(BufferUtils.fromBase64(Dummy.address1));
     const value = 1;
     const fee = 1;
@@ -13,14 +13,14 @@ describe('Subscription', () => {
 
     beforeAll((done) => {
         (async () => {
-            await Crypto.prepareSyncCryptoWorker();
-            senderAddress = senderPubKey.toAddressSync();
+            senderAddress = senderPubKey.toAddress();
+
             // create testing blockchain with only genesis and dummy users
             testBlockchain = await TestBlockchain.createVolatileTest(0);
             block = await testBlockchain.createBlock();
 
             tx1 = new BasicTransaction(senderPubKey, recipientAddr, value, fee, nonce, signature);
-            tx2 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddr, Account.Type.BASIC, value, fee, nonce, data, proof);
+            tx2 = new ExtendedTransaction(senderAddress, Account.Type.BASIC, recipientAddr, Account.Type.BASIC, value, fee, nonce, Transaction.Flag.NONE, data, proof);
 
             txHighFee = new BasicTransaction(senderPubKey, recipientAddr, value, tx1.serializedSize*2, nonce, signature);
         })().then(done, done.fail);

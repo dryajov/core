@@ -34,10 +34,10 @@ class SignatureProof {
      * @param {PublicKey} signerKey
      * @param {Array.<PublicKey>} publicKeys
      * @param {Signature} signature
-     * @returns {Promise.<SignatureProof>}
+     * @returns {SignatureProof}
      */
-    static async multiSig(signerKey, publicKeys, signature) {
-        const merklePath = await MerklePath.compute(publicKeys, signerKey);
+    static multiSig(signerKey, publicKeys, signature) {
+        const merklePath = MerklePath.compute(publicKeys, signerKey);
         return new SignatureProof(signerKey, merklePath, signature);
     }
 
@@ -117,14 +117,12 @@ class SignatureProof {
     }
 
     /**
-     * @param {Address} sender
+     * @param {?Address} sender
      * @param {Uint8Array} data
      * @returns {Promise.<boolean>}
      */
     async verify(sender, data) {
-        const merkleRoot = await this._merklePath.computeRoot(this._publicKey);
-        const signerAddr = Address.fromHash(merkleRoot);
-        if (!signerAddr.equals(sender)) {
+        if (sender !== null && !this.isSignedBy(sender)) {
             Log.w(SignatureProof, 'Invalid SignatureProof - signer does not match sender address');
             return false;
         }
@@ -140,6 +138,16 @@ class SignatureProof {
         }
 
         return true;
+    }
+
+    /**
+     * @param {Address} sender
+     * @returns {boolean}
+     */
+    isSignedBy(sender) {
+        const merkleRoot = this._merklePath.computeRoot(this._publicKey);
+        const signerAddr = Address.fromHash(merkleRoot);
+        return signerAddr.equals(sender);
     }
 
     /** @type {PublicKey} */

@@ -164,11 +164,11 @@ class PeerConnector extends Observable {
                             .catch(error => this._errorLog(error));
                     }
 
-                    this._handleCandidateQueue();
+                    this._handleCandidateQueue().catch(Log.w.tag(PeerConnector));
                 })
                 .catch(error => this._errorLog(error));
         } else if (signal.candidate) {
-            this._addIceCandidate(signal);
+            this._addIceCandidate(signal).catch(Log.w.tag(PeerConnector));
         }
     }
 
@@ -201,7 +201,7 @@ class PeerConnector extends Observable {
     async _signal(signal) {
         const payload = BufferUtils.fromAscii(JSON.stringify(signal));
         const keyPair = this._webRtcConfig.keyPair;
-        const signalId = await keyPair.publicKey.toSignalId();
+        const signalId = keyPair.publicKey.toSignalId();
         this._signalChannel.signal(
             signalId,
             this._signalId,
@@ -216,7 +216,7 @@ class PeerConnector extends Observable {
 
     _onIceCandidate(event) {
         if (event.candidate !== null) {
-            this._signal(event.candidate);
+            this._signal(event.candidate).catch(Log.w.tag(PeerConnector));
         }
     }
 

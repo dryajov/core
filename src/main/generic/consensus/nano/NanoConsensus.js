@@ -25,18 +25,14 @@ class NanoConsensus extends Observable {
         /** @type {Peer} */
         this._syncPeer = null;
 
+        /** @type {Array.<Address>} */
+        this._addresses = [];
+
         network.on('peer-joined', peer => this._onPeerJoined(peer));
         network.on('peer-left', peer => this._onPeerLeft(peer));
 
         // Notify peers when our blockchain head changes.
-        blockchain.on('head-changed', head => {
-            // Don't announce head changes if we are not synced yet.
-            if (!this._established) return;
-
-            for (const agent of this._agents.values()) {
-                agent.relayBlock(head);
-            }
-        });
+        blockchain.on('head-changed', head => this._onHeadChanged(head));
     }
 
     /**
@@ -115,7 +111,7 @@ class NanoConsensus extends Observable {
         }
 
         Log.v(NanoConsensus, `Syncing blockchain with peer ${agent.peer.peerAddress}`);
-        agent.syncBlockchain();
+        agent.syncBlockchain().catch(Log.w.tag(NanoConsensusAgent));
     }
 
     /**
@@ -130,6 +126,22 @@ class NanoConsensus extends Observable {
             this.fire('sync-finished', peer.peerAddress);
         }
         this._syncBlockchain();
+    }
+
+    /**
+     * @param {Block} head
+     * @private
+     */
+    async _onHeadChanged(head) {
+        // Don't announce head changes if we are not synced yet.
+        if (!this._established) return;
+
+        for (const agent of this._agents.values()) {
+            agent.relayBlock(head);
+        }
+
+        const includedTransactions = await this.getTransactionsProof(this._addresses, head.hash());
+        this._mempool.changeHead(head, includedTransactions);
     }
 
     /**
@@ -169,6 +181,16 @@ class NanoConsensus extends Observable {
 
     /**
      * @param {Array.<Address>} addresses
+     */
+    subscribeAccounts(addresses) {
+        this._addresses = addresses;
+        for (const /** @type {NanoConsensusAgent} */ agent of this._agents.values()) {
+            agent.subscribeAccounts(this._addresses);
+        }
+    }
+
+    /**
+     * @param {Array.<Address>} addresses
      * @param {Hash} [blockHash]
      * @returns {Promise.<Array<Transaction>>}
      */
@@ -195,7 +217,7 @@ class NanoConsensus extends Observable {
 
     /**
      * @param {Transaction} transaction
-     * @returns {Promise.<boolean>}
+     * @returns {Promise.<void>}
      */
     async relayTransaction(transaction) {
         // Fail if we are not connected to at least one full/light node.
@@ -209,17 +231,15 @@ class NanoConsensus extends Observable {
         }
 
         // Relay transaction to all connected peers.
-        const promises = [];
+        let relayed = false;
         for (const agent of this._agents.values()) {
-            promises.push(agent.relayTransaction(transaction));
+            relayed = agent.relayTransaction(transaction) || relayed;
         }
 
         // Fail if the transaction was not relayed.
-        return Promise.all(promises).then(results => {
-            if (!results.some(it => !!it)) {
-                throw new Error('Failed to relay transaction - no agent relayed transaction');
-            }
-        });
+        if (!relayed) {
+            throw new Error('Failed to relay transaction - no agent relayed transaction');
+        }
     }
 
     /**

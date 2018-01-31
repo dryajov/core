@@ -80,7 +80,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         }
 
         // We don't know the peer's head block, request blocks from it.
-        this._requestBlocks();
+        this._requestBlocks().catch(Log.w.tag(FullConsensusAgent));
     }
 
     _syncFinished() {
@@ -125,7 +125,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         const locators = [];
         if (onFork) {
             // Only send the fork head as locator if the peer is sending us a fork.
-            locators.push(await this._forkHead.hash());
+            locators.push(this._forkHead.hash());
         } else {
             // Request blocks starting from our hardest chain head going back to
             // the genesis block. Push top 10 hashes first, then back off exponentially.
@@ -144,7 +144,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
             for (let i = this._blockchain.height - 10 - step; i > 0; i -= step) {
                 block = await this._blockchain.getBlockAt(i); // eslint-disable-line no-await-in-loop
                 if (block) {
-                    locators.push(await block.hash()); // eslint-disable-line no-await-in-loop
+                    locators.push(block.hash()); // eslint-disable-line no-await-in-loop
                 }
                 step *= 2;
             }
@@ -233,7 +233,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
     _onNoUnknownObjects() {
         // The peer does not have any new inv vectors for us.
         if (this._syncing) {
-            this.syncBlockchain();
+            this.syncBlockchain().catch(Log.w.tag(FullConsensusAgent));
         }
     }
 
@@ -244,7 +244,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
     _onAllObjectsReceived() {
         // If all objects have been received, request more if we're syncing the blockchain.
         if (this._syncing) {
-            this.syncBlockchain();
+            this.syncBlockchain().catch(Log.w.tag(FullConsensusAgent));
         }
     }
 
@@ -352,11 +352,11 @@ class FullConsensusAgent extends BaseConsensusAgent {
                 return false;
             case Mempool.ReturnCode.FEE_TOO_LOW:
                 this.peer.channel.reject(Message.Type.TX, RejectMessage.Code.REJECT_INSUFFICIENT_FEE,
-                    'Sender has too many free transactions', (await transaction.hash()).serialize());
+                    'Sender has too many free transactions', transaction.hash().serialize());
                 return false;
             case Mempool.ReturnCode.INVALID:
                 this.peer.channel.reject(Message.Type.TX, RejectMessage.Code.REJECT_INVALID, 'Invalid transaction',
-                    (await transaction.hash()).serialize());
+                    transaction.hash().serialize());
                 return false;
             default:
                 return false;
@@ -370,7 +370,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
     _onAllObjectsProcessed() {
         // If all objects have been processed, request more if we're syncing the blockchain.
         if (this._syncing) {
-            this.syncBlockchain();
+            this.syncBlockchain().catch(Log.w.tag(FullConsensusAgent));
         }
     }
 
@@ -407,8 +407,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
             msg.direction === GetBlocksMessage.Direction.FORWARD);
         const vectors = [];
         for (const block of blocks) {
-            const hash = await block.hash();
-            vectors.push(new InvVector(InvVector.Type.BLOCK, hash));
+            vectors.push(InvVector.fromBlock(block));
         }
 
         // Send the vectors back to the requesting peer.
@@ -480,7 +479,7 @@ class FullConsensusAgent extends BaseConsensusAgent {
         // Split into multiple Inv messages if the mempool is large.
         let vectors = [];
         for (const tx of transactions) {
-            vectors.push(await InvVector.fromTransaction(tx));
+            vectors.push(InvVector.fromTransaction(tx));
 
             if (vectors.length >= BaseInventoryMessage.VECTORS_MAX_COUNT) {
                 this._peer.channel.inv(vectors);

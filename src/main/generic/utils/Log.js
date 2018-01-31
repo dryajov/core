@@ -200,4 +200,12 @@ Log.WARNING = Log.Level.WARNING;
 Log.ERROR = Log.Level.ERROR;
 Log.ASSERT = Log.Level.ASSERT;
 Log._instance = null;
+
+Log.d.tag = (tag) => Log.d.bind(null, tag);
+Log.e.tag = (tag) => Log.e.bind(null, tag);
+Log.i.tag = (tag) => Log.i.bind(null, tag);
+Log.v.tag = (tag) => Log.v.bind(null, tag);
+Log.w.tag = (tag) => Log.w.bind(null, tag);
+Log.t.tag = (tag) => Log.t.bind(null, tag);
+
 Class.register(Log);

@@ -95,7 +95,7 @@ class SignalMessage extends Message {
         if (!this._signature) {
             return false;
         }
-        return (await this._signature.verify(this._senderPubKey, this._payload)) && this._senderId.equals(await this._senderPubKey.toSignalId());
+        return (await this._signature.verify(this._senderPubKey, this._payload)) && this._senderId.equals(this._senderPubKey.toSignalId());
     }
 
     /** @type {SignalId} */
@@ -149,20 +149,20 @@ class SignalMessage extends Message {
      * @returns {boolean}
      */
     isUnroutable() {
-        return (this._flags & SignalMessage.Flags.UNROUTABLE) !== 0;
+        return (this._flags & SignalMessage.Flag.UNROUTABLE) !== 0;
     }
 
     /**
      * @returns {boolean}
      */
     isTtlExceeded() {
-        return (this._flags & SignalMessage.Flags.TTL_EXCEEDED) !== 0;
+        return (this._flags & SignalMessage.Flag.TTL_EXCEEDED) !== 0;
     }
 }
 /**
  * @enum {number}
  */
-SignalMessage.Flags = {
+SignalMessage.Flag = {
     UNROUTABLE: 0x1,
     TTL_EXCEEDED: 0x2
 };

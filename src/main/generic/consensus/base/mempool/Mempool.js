@@ -39,10 +39,17 @@ class Mempool extends Observable {
      */
     async _pushTransaction(transaction) {
         // Check if we already know this transaction.
-        const hash = await transaction.hash();
+        const hash = transaction.hash();
         if (this._transactionsByHash.contains(hash)) {
             Log.v(Mempool, () => `Ignoring known transaction ${hash.toBase64()}`);
             return Mempool.ReturnCode.KNOWN;
+        }
+
+        const set = this._transactionSetByAddress.get(transaction.sender) || new MempoolTransactionSet();
+        // Check limit for free transactions.
+        if (transaction.fee / transaction.serializedSize < Mempool.TRANSACTION_RELAY_FEE_MIN
+            && set.numBelowFeePerByte(Mempool.TRANSACTION_RELAY_FEE_MIN) >= Mempool.FREE_TRANSACTIONS_PER_SENDER_MAX) {
+            return Mempool.ReturnCode.FEE_TOO_LOW;
         }
 
         // Intrinsic transaction verification
@@ -61,21 +68,31 @@ class Mempool extends Observable {
         }
 
         // Fully verify the transaction against the current accounts state + Mempool.
-        const set = this._transactionSetByAddress.get(transaction.sender) || new MempoolTransactionSet();
-        if (!(await senderAccount.verifyOutgoingTransactionSet([...set.transactions, transaction], this._blockchain.height + 1, this._blockchain.transactionsCache))) {
+        const newSet = set.copyAndAdd(transaction);
+        let tmpAccount = senderAccount;
+        try {
+            for (const tx of newSet.transactions) {
+                tmpAccount = tmpAccount.withOutgoingTransaction(tx, this._blockchain.height + 1, this._blockchain.transactionsCache);
+            }
+        } catch (e) {
+            Log.w(Mempool, `Rejected transaction - ${e.message}`, transaction);
             return Mempool.ReturnCode.INVALID;
         }
 
-        // Check limit for free transactions.
-        if (transaction.fee/transaction.serializedSize < Mempool.TRANSACTION_RELAY_FEE_MIN
-            && set.numBelowFeePerByte(Mempool.TRANSACTION_RELAY_FEE_MIN) >= Mempool.FREE_TRANSACTIONS_PER_SENDER_MAX) {
-            return Mempool.ReturnCode.FEE_TOO_LOW;
+        // Retrieve recipient account and test incoming transaction.
+        /** @type {Account} */
+        let recipientAccount;
+        try {
+            recipientAccount = await this._accounts.get(transaction.recipient);
+            await recipientAccount.withIncomingTransaction(transaction, this._blockchain.height + 1);
+        } catch (e) {
+            Log.w(Mempool, `Rejected transaction - ${e.message}`, transaction);
+            return Mempool.ReturnCode.INVALID;
         }
 
         // Transaction is valid, add it to the mempool.
-        set.add(transaction);
         this._transactionsByHash.put(hash, transaction);
-        this._transactionSetByAddress.put(transaction.sender, set);
+        this._transactionSetByAddress.put(transaction.sender, newSet);
 
         // Tell listeners about the new valid transaction we received.
         this.fire('transaction-added', transaction);
@@ -95,7 +112,7 @@ class Mempool extends Observable {
      * @param {number} [maxSize]
      * @returns {Array.<Transaction>}
      */
-    getTransactions(maxSize=Infinity) {
+    getTransactions(maxSize = Infinity) {
         const transactions = [];
         let size = 0;
         for (const tx of this._transactionsByHash.values().sort((a, b) => a.compare(b))) {
@@ -112,8 +129,16 @@ class Mempool extends Observable {
     /**
      * @param {number} maxSize
      */
-    getTransactionsForBlock(maxSize) {
+    async getTransactionsForBlock(maxSize) {
         const transactions = this.getTransactions(maxSize);
+        const prunedAccounts = await this._accounts.gatherToBePrunedAccounts(transactions, this._blockchain.height + 1, this._blockchain.transactionsCache);
+        const prunedAccountsSize = prunedAccounts.reduce((sum, acc) => sum + acc.serializedSize, 0);
+
+        let size = prunedAccountsSize + transactions.reduce((sum, tx) => sum + tx.serializedSize, 0); 
+        while (size > maxSize) {
+            size -= transactions.pop().serializedSize;
+        }
+
         transactions.sort((a, b) => a.compareBlockOrder(b));
         return transactions;
     }
@@ -122,12 +147,9 @@ class Mempool extends Observable {
      * @param {Address} address
      * @return {Array.<Transaction>}
      */
-    getWaitingTransactions(address) {
-        if (this._transactionSetByAddress.contains(address)) {
-            return this._transactionSetByAddress.get(address).transactions;
-        } else {
-            return [];
-        }
+    getPendingTransactions(address) {
+        const set = this._transactionSetByAddress.get(address);
+        return set ? set.transactions : [];
     }
 
     /**
@@ -158,27 +180,30 @@ class Mempool extends Observable {
                 // If a transaction in the set is not valid anymore,
                 // we try to construct a new set based on the heuristic of including
                 // high fee/byte transactions first.
-                if (!(await senderAccount.verifyOutgoingTransactionSet(set.transactions, this._blockchain.height + 1, this._blockchain.transactionsCache, true))) {
-                    const transactions = [];
-                    for (const tx of set.transactions) {
-                        transactions.push(tx);
+                const transactions = [];
+                let account = senderAccount;
+                for (const tx of set.transactions) {
+                    try {
+                        const tmpAccount = await account.withOutgoingTransaction(tx, this._blockchain.height + 1, this._blockchain.transactionsCache);
 
-                        if (!(await senderAccount.verifyOutgoingTransactionSet(transactions, this._blockchain.height + 1, this._blockchain.transactionsCache, true))) {
-                            transactions.pop();
-                            this._transactionsByHash.remove(await tx.hash());
-                        }
+                        const recipientAccount = await this._accounts.get(tx.recipient);
+                        await recipientAccount.withIncomingTransaction(tx, this._blockchain.height + 1);
+
+                        transactions.push(tx);
+                        account = tmpAccount;
+                    } catch (e) {
+                        this._transactionsByHash.remove(tx.hash());
                     }
-                    if (transactions.length === 0) {
-                        this._transactionSetByAddress.remove(sender);
-                    } else {
-                        this._transactionSetByAddress.put(sender, new MempoolTransactionSet(transactions));
-                    }
+                }
+                if (transactions.length === 0) {
+                    this._transactionSetByAddress.remove(sender);
+                } else {
+                    this._transactionSetByAddress.put(sender, new MempoolTransactionSet(transactions));
                 }
             } catch (e) {
                 // In case of an error, remove all transactions of this set.
-                let transaction;
-                while ((transaction = set.pop())) {
-                    this._transactionsByHash.remove(await transaction.hash());
+                for (const tx of set.transactions) {
+                    this._transactionsByHash.remove(tx.hash());
                 }
                 this._transactionSetByAddress.remove(sender);
             }

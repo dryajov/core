@@ -126,7 +126,7 @@ class LightConsensusAgent extends FullConsensusAgent {
                         this.fire('sync-accounts-tree', this._peer.peerAddress);
                         break;
                     case PartialLightChain.State.PROVE_BLOCKS:
-                        this._requestProofBlocks();
+                        this._requestProofBlocks().catch(Log.w.tag(LightConsensusAgent));
                         this.fire('verify-accounts-tree', this._peer.peerAddress);
                         break;
                     case PartialLightChain.State.COMPLETE:
@@ -247,7 +247,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         // TODO add all blocks from the chain proof to knownObjects.
         this._busy = false;
-        this.syncBlockchain();
+        this.syncBlockchain().catch(Log.w.tag(LightConsensusAgent));
     }
 
     // Stage 2: Request AccountsTree.
@@ -321,7 +321,7 @@ class LightConsensusAgent extends FullConsensusAgent {
 
         // Verify the proof.
         const chunk = msg.chunk;
-        if (!(await chunk.verify())) {
+        if (!chunk.verify()) {
             Log.w(LightConsensusAgent, `Invalid AccountsTreeChunk received from ${this._peer.peerAddress}`);
             // TODO ban instead?
             this._peer.channel.close('Invalid AccountsTreeChunk');
@@ -329,7 +329,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         }
 
         // Check that the proof root hash matches the accountsHash in the reference block.
-        const rootHash = await chunk.root();
+        const rootHash = chunk.root();
         const block = await this._partialChain.getBlock(blockHash);
         if (!block.accountsHash.equals(rootHash)) {
             Log.w(LightConsensusAgent, `Invalid AccountsTreeChunk (root hash) received from ${this._peer.peerAddress}`);
@@ -349,7 +349,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         }
 
         this._busy = false;
-        this.syncBlockchain();
+        this.syncBlockchain().catch(Log.w.tag(LightConsensusAgent));
     }
 
     // Stage 3: Request proof blocks.
@@ -380,7 +380,7 @@ class LightConsensusAgent extends FullConsensusAgent {
         }, BaseConsensusAgent.REQUEST_TIMEOUT);
 
         // Request blocks from peer.
-        this._peer.channel.getBlocks(await this._partialChain.getBlockLocators(), this._partialChain.numBlocksNeeded(), false);
+        this._peer.channel.getBlocks(this._partialChain.getBlockLocators(), this._partialChain.numBlocksNeeded(), false);
     }
 
     // Block processing.
@@ -409,7 +409,7 @@ class LightConsensusAgent extends FullConsensusAgent {
             && (!this._partialChain || this._partialChain.state !== PartialLightChain.State.PROVE_BLOCKS)) {
             this._onMainChain = false;
             await this._initChainProofSync();
-            this.syncBlockchain();
+            this.syncBlockchain().catch(Log.w.tag(LightConsensusAgent));
             return;
         } else {
             this._onMainChain = true;
@@ -508,13 +508,13 @@ class LightConsensusAgent extends FullConsensusAgent {
 
     /**
      * @param {HeaderMessage} msg
-     * @return {Promise.<void>}
+     * @return {void}
      * @protected
      * @override
      */
-    async _onHeader(msg) {
+    _onHeader(msg) {
         const header = msg.header;
-        const hash = await header.hash();
+        const hash = header.hash();
 
         // Check if we have requested this block.
         if (!this._headerRequest) {
@@ -548,7 +548,7 @@ class LightConsensusAgent extends FullConsensusAgent {
      */
     _onClose() {
         if (this._partialChain) {
-            this._partialChain.abort();
+            this._partialChain.abort().catch(Log.w.tag(LightConsensusAgent));
         }
 
         super._onClose();
