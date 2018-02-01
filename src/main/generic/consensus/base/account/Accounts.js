@@ -101,7 +101,7 @@ class Accounts extends Observable {
 
             const toBePruned = [];
             for (const tx of transactions) {
-                const senderAccount = await this.get(tx.sender, tx.senderType, tree);
+                const senderAccount = await this.get(tx.sender, undefined, tree);
                 if (senderAccount.isToBePruned()) {
                     toBePruned.push(new PrunedAccount(tx.sender, senderAccount));
                 }
@@ -159,10 +159,7 @@ class Accounts extends Observable {
             if (typeof accountType === 'undefined') {
                 return Account.INITIAL;
             }
-            if (!Account.TYPE_MAP.has(accountType)) {
-                throw new Error('Invalid account type');
-            }
-            return Account.TYPE_MAP.get(accountType).INITIAL;
+            throw new Error('Account type was given but account not present');
         } else if (typeof accountType !== 'undefined' && account.type !== accountType) {
             throw new Error('Account type does match actual account');
         }
@@ -188,7 +185,7 @@ class Accounts extends Observable {
     /**
      * @returns {Promise.<PartialAccountsTree>}
      */
-    async partialAccountsTree() {
+    partialAccountsTree() {
         return this._tree.partialTree();
     }
 
@@ -274,7 +271,7 @@ class Accounts extends Observable {
 
         const prunedAccounts = body.prunedAccounts.slice();
         for (const tx of body.transactions) {
-            const senderAccount = await this.get(tx.sender, tx.senderType, tree);
+            const senderAccount = await this.get(tx.sender, undefined, tree);
             if (senderAccount.isToBePruned()) {
                 const accIdx = prunedAccounts.findIndex((acc) => acc.address.equals(tx.sender));
                 if (accIdx === -1 || !senderAccount.equals(prunedAccounts[accIdx].account)) {
