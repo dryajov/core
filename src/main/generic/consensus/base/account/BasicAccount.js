@@ -48,18 +48,18 @@ class BasicAccount extends Account {
 
     /**
      * @param {Transaction} transaction
-     * @return {Promise.<boolean>}
+     * @return {boolean}
      */
     static verifyOutgoingTransaction(transaction) {
-        return Promise.resolve(SignatureProof.verifyTransaction(transaction));
+        return SignatureProof.verifyTransaction(transaction);
     }
 
     /**
      * @param {Transaction} transaction
-     * @return {Promise.<boolean>}
+     * @return {boolean}
      */
     static verifyIncomingTransaction(transaction) {
-        return Promise.resolve(true); // Accept everything
+        return true; // Accept everything
     }
 
     /**
@@ -77,8 +77,12 @@ class BasicAccount extends Account {
      * @return {Account}
      */
     withIncomingTransaction(transaction, blockHeight, revert = false) {
-        if (!revert && transaction.recipientType === this._type && transaction.hasFlag(Transaction.Flag.CONTRACT_CREATION)) {
-            throw new Error('Data Error!');
+        if (!revert) {
+            const isContractCreation = transaction.hasFlag(Transaction.Flag.CONTRACT_CREATION);
+            const isTypeChange = transaction.recipientType !== this._type;
+            if (isContractCreation !== isTypeChange) {
+                throw new Error('Data Error!');
+            }
         }
         return super.withIncomingTransaction(transaction, blockHeight, revert);
     }
